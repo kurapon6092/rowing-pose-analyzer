@@ -390,7 +390,7 @@ st.sidebar.markdown("---")
 st.sidebar.header("⚙️ 設定")
 
 # 再生速度設定
-frame_skip = st.sidebar.slider("Frame Skip (Speed Up)", 1, 5, 2, 
+frame_skip = st.sidebar.slider("Frame Skip (Speed Up)", 1, 5, 1, 
                                help="Higher = Faster. 2=Half frames, 3=1/3 frames")
 st.sidebar.text(f"Processing: 1/{frame_skip} frames")
 
