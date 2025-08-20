@@ -1,6 +1,6 @@
 opencv-python-headless>=4.8.0
 mediapipe==0.10.14
-streamlit>=1.31
+streamlit==1.29.0
 numpy
 pandas>=2.0.0
 matplotlib>=3.7.0
