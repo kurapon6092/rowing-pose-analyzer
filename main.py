@@ -15,39 +15,31 @@ mp_face_mesh = mp.solutions.face_mesh
 
 class VideoAnalyzer:
     def __init__(self):
-        # 軽量化されたMediaPipe設定
         self.pose = mp_pose.Pose(
             static_image_mode=False,
-            model_complexity=0,  # 0=軽量 (1から0に変更)
+            model_complexity=1,
             enable_segmentation=False,
-            min_detection_confidence=0.7,  # 閾値を上げて計算量削減
-            min_tracking_confidence=0.7
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
         )
         self.face_mesh = mp_face_mesh.FaceMesh(
             static_image_mode=False,
             max_num_faces=1,
-            refine_landmarks=False,  # Trueから変更で軽量化
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.7
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5
         )
-        
-        # メモリ効率化: 最新の値のみ保持
-        self.current_angle = 0
+        self.hip_angles = []
         self.max_angle = 0
         self.min_angle = float('inf')
         self.fixed_head_y = None
-        self.frame_count = 0
         
-        # 前方停止検知用 - メモリ使用量削減
+        # 前方停止検知用
         self.recent_angles = []
-        self.pause_detection_window = 5  # 8から5に削減
-        self.pause_threshold = 1.5  # 少し緩めて計算負荷軽減
+        self.pause_detection_window = 8
+        self.pause_threshold = 1.0
         self.is_paused_forward = False
         self.pause_counter = 0
-        
-        # 統計用の軽量データ
-        self.angle_sum = 0
-        self.angle_count = 0
     
     def calculate_angle(self, point1, point2, point3):
         """3点間の角度を計算"""
@@ -71,59 +63,89 @@ class VideoAnalyzer:
         return image
     
     def draw_hip_angle(self, image, angle, position):
-        """腰の角度を描画（軽量化）"""
-        # 軽量化: 背景矩形を簡素化
-        cv2.putText(image, f"{angle:.1f}°", position,
-                   cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 0), 4)  # 黒い縁取り
-        cv2.putText(image, f"{angle:.1f}°", position,
-                   cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)  # メインテキスト
+        """腰の角度を描画（大きなフォント）"""
+        text_size = cv2.getTextSize(f"Hip Angle: {angle:.1f} deg", cv2.FONT_HERSHEY_SIMPLEX, 1.2, 3)[0]
+        cv2.rectangle(image, (position[0] - 10, position[1] - text_size[1] - 15),
+                     (position[0] + text_size[0] + 10, position[1] + 10), (0, 0, 0), -1)
+        cv2.rectangle(image, (position[0] - 10, position[1] - text_size[1] - 15),
+                     (position[0] + text_size[0] + 10, position[1] + 10), (255, 255, 255), 2)
+        cv2.putText(image, f"Hip Angle: {angle:.1f} deg", position,
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 255), 3)
         return image
     
     def draw_eye_gaze(self, image, face_landmarks):
-        """軽量化された目線矢印表示"""
+        """絶対に見える目線矢印表示"""
         height, width = image.shape[:2]
         center_x = width // 2
         center_y = height // 3
-        arrow_end_x = center_x + 50
+        arrow_end_x = center_x + 80
         arrow_end_y = center_y
+        gaze_status = "STRAIGHT"
         status_color = (0, 255, 0)
         
         if face_landmarks:
             try:
-                # 軽量化: 基本的なランドマークのみ使用
                 nose_tip = face_landmarks.landmark[1]
+                forehead = face_landmarks.landmark[10]
+                chin = face_landmarks.landmark[175]
+                
                 nose_x = int(nose_tip.x * width)
+                nose_y = int(nose_tip.y * height)
+                forehead_y = int(forehead.y * height)
+                chin_y = int(chin.y * height)
                 
-                horizontal_offset = nose_x - center_x
+                horizontal_offset = nose_x - (width // 2)
+                face_height = chin_y - forehead_y
+                vertical_offset = nose_y - (forehead_y + face_height / 2)
                 
-                # 簡素化された方向判定
-                if abs(horizontal_offset) > width * 0.1:
-                    h_direction = 1 if horizontal_offset > 0 else -1
+                vertical_ratio = vertical_offset / (face_height * 0.3) if face_height > 0 else 0
+                horizontal_ratio = horizontal_offset / (width * 0.15)
+                
+                h_direction = 0 if abs(horizontal_ratio) < 0.5 else (1 if horizontal_ratio > 0 else -1)
+                v_direction = 0 if abs(vertical_ratio) < 0.5 else (1 if vertical_ratio > 0 else -1)
+                
+                if h_direction == 0 and v_direction == 0:
+                    gaze_status = "STRAIGHT"
+                    status_color = (0, 255, 0)
+                else:
+                    status_parts = []
+                    if v_direction == -1: status_parts.append("UP")
+                    elif v_direction == 1: status_parts.append("DOWN")
+                    if h_direction == -1: status_parts.append("LEFT")
+                    elif h_direction == 1: status_parts.append("RIGHT")
+                    gaze_status = " + ".join(status_parts)
                     status_color = (0, 255, 255)
-                    arrow_end_x = center_x + (h_direction * 50)
+                
+                arrow_length = 80
+                arrow_end_x = center_x + (h_direction * arrow_length)
+                arrow_end_y = center_y + (v_direction * arrow_length)
+                
+                if h_direction == 0 and v_direction == 0:
+                    arrow_end_x = center_x + 50
+                    arrow_end_y = center_y
             except:
                 pass
         
-        # 軽量化: 単一の矢印のみ
-        cv2.arrowedLine(image, (center_x, center_y), (arrow_end_x, arrow_end_y), status_color, 8, tipLength=0.3)
-        cv2.circle(image, (center_x, center_y), 8, status_color, -1)
+        cv2.arrowedLine(image, (center_x, center_y), (arrow_end_x, arrow_end_y), (0, 0, 0), 20, tipLength=0.3)
+        cv2.arrowedLine(image, (center_x, center_y), (arrow_end_x, arrow_end_y), (255, 255, 255), 15, tipLength=0.3)
+        cv2.arrowedLine(image, (center_x, center_y), (arrow_end_x, arrow_end_y), status_color, 10, tipLength=0.3)
+        cv2.circle(image, (center_x, center_y), 15, (255, 0, 0), -1)
+        cv2.circle(image, (center_x, center_y), 18, (255, 255, 255), 3)
         
         return image
     
     def detect_forward_pause(self, hip_angle):
-        """軽量化された前方停止検知"""
+        """前方停止検知（厳しい判定）"""
         self.recent_angles.append(hip_angle)
         if len(self.recent_angles) > self.pause_detection_window:
             self.recent_angles.pop(0)
         
         if len(self.recent_angles) >= self.pause_detection_window:
-            # 軽量化: 簡素化された計算
-            angle_range = max(self.recent_angles) - min(self.recent_angles)
-            avg_angle = sum(self.recent_angles) / len(self.recent_angles)
+            angle_std = np.std(self.recent_angles)
+            avg_angle = np.mean(self.recent_angles)
             
-            # 軽量化: 簡単な判定条件
-            is_stable = angle_range < self.pause_threshold
-            is_forward_position = avg_angle > self.current_angle * 1.1 if self.current_angle > 0 else True
+            is_forward_position = avg_angle > np.mean(self.hip_angles) + 0.25 * np.std(self.hip_angles) if len(self.hip_angles) > 10 else True
+            is_stable = angle_std < self.pause_threshold
             
             if is_forward_position and is_stable:
                 if not self.is_paused_forward:
@@ -136,45 +158,36 @@ class VideoAnalyzer:
                 self.pause_counter = 0
     
     def draw_pause_indicator(self, image):
-        """軽量化された前方停止インジケーター"""
+        """前方停止インジケーターを描画"""
         if self.is_paused_forward and self.pause_counter > 2:
             height, width = image.shape[:2]
             
-            # 軽量化: 色のみで判定
             if self.pause_counter < 10:
                 color = (0, 255, 0)
+                status = "GOOD PAUSE"
             elif self.pause_counter < 20:
                 color = (0, 255, 255)
+                status = "PAUSE OK"
             else:
                 color = (0, 0, 255)
+                status = "TOO LONG"
             
-            # 軽量化: シンプルなサークル表示
-            cv2.circle(image, (width - 50, 50), 30, color, -1)
-            cv2.putText(image, "P", (width - 58, 58), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+            cv2.rectangle(image, (width - 300, 10), (width - 10, 100), (0, 0, 0), -1)
+            cv2.rectangle(image, (width - 300, 10), (width - 10, 100), color, 3)
+            cv2.putText(image, "FORWARD PAUSE", (width - 290, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+            cv2.putText(image, status, (width - 290, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            cv2.putText(image, f"{self.pause_counter}f", (width - 290, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         
         return image
     
     def process_frame(self, frame):
-        """軽量化されたフレーム処理"""
-        # メモリ削減: フレームサイズを縮小
-        height, width = frame.shape[:2]
-        if width > 640:  # 大きすぎる場合は縮小
-            scale = 640 / width
-            new_width = 640
-            new_height = int(height * scale)
-            frame = cv2.resize(frame, (new_width, new_height))
-        
+        """フレームを処理"""
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pose_results = self.pose.process(rgb_frame)
-        
-        # 軽量化: 顔検出は5フレームに1回のみ
-        face_results = None
-        if self.frame_count % 5 == 0:
-            face_results = self.face_mesh.process(rgb_frame)
+        face_results = self.face_mesh.process(rgb_frame)
         
         if pose_results.pose_landmarks:
-            # 軽量化: 骨格線は描画しない（処理負荷軽減）
-            # mp_drawing.draw_landmarks(frame, pose_results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
+            mp_drawing.draw_landmarks(frame, pose_results.pose_landmarks, mp_pose.POSE_CONNECTIONS)
             
             landmarks = pose_results.pose_landmarks.landmark
             
@@ -195,12 +208,7 @@ class VideoAnalyzer:
             height, width = frame.shape[:2]
             hip_center = [int(left_hip[0] * width), int(left_hip[1] * height)]
             
-            # メモリ効率化: 配列を使わず統計のみ保持
-            self.current_angle = hip_angle
-            self.frame_count += 1
-            self.angle_sum += hip_angle
-            self.angle_count += 1
-            
+            self.hip_angles.append(hip_angle)
             if hip_angle > self.max_angle:
                 self.max_angle = hip_angle
             if hip_angle < self.min_angle:
@@ -211,25 +219,20 @@ class VideoAnalyzer:
             frame = self.draw_hip_angle(frame, hip_angle, (int(hip_center[0]), int(hip_center[1])))
             frame = self.draw_pause_indicator(frame)
         
-        # 軽量化: 目線検出は軽量化版のみ
-        if face_results and face_results.multi_face_landmarks:
+        if face_results.multi_face_landmarks:
             for face_landmarks in face_results.multi_face_landmarks:
                 frame = self.draw_eye_gaze(frame, face_landmarks)
         
         return frame
-    
-    def get_average_angle(self):
-        """平均角度を取得"""
-        return self.angle_sum / self.angle_count if self.angle_count > 0 else 0
 
 # Streamlit UI
-st.title("🏃‍♂️ ローイング姿勢解析アプリ（軽量版）")
-st.markdown("**高速処理・軽量化・腰角度測定・目線検出**")
+st.title("🏃‍♂️ ローイング姿勢解析アプリ")
+st.markdown("**骨格トレース、腰角度測定、目線検出**")
 
 # サイドバー設定
 st.sidebar.header("⚙️ 設定")
-frame_skip = st.sidebar.slider("フレームスキップ (高速化)", 1, 10, 3, 
-                               help="数値が大きいほど高速処理（推奨: 3-5）",
+frame_skip = st.sidebar.slider("フレームスキップ (高速化)", 1, 5, 1, 
+                               help="数値が大きいほど高速処理",
                                key="main_frame_skip")
 
 # 単体解析
@@ -276,8 +279,8 @@ if uploaded_file is not None:
             if processed_frame is not None:
                 stframe.image(processed_frame, channels="BGR")
             
-            if analyzer.current_angle > 0:
-                current_angle = analyzer.current_angle
+            if analyzer.hip_angles:
+                current_angle = analyzer.hip_angles[-1]
                 
                 current_display.markdown(f"""
                 <div style='background-color: #1f4e79; padding: 15px; border-radius: 10px;'>
@@ -325,12 +328,11 @@ if uploaded_file is not None:
         cap.release()
         os.unlink(tfile.name)
         
-        if analyzer.angle_count > 0:
+        if analyzer.hip_angles:
             st.success("🎉 解析完了！")
             
-            avg_angle = analyzer.get_average_angle()
-            # 軽量化: 標準偏差の代わりに範囲を使用
-            angle_range = analyzer.max_angle - analyzer.min_angle
+            avg_angle = np.mean(analyzer.hip_angles)
+            std_angle = np.std(analyzer.hip_angles)
             
             col1, col2, col3, col4 = st.columns(4)
             
@@ -341,29 +343,31 @@ if uploaded_file is not None:
             with col3:
                 st.metric("平均角度", f"{avg_angle:.1f}°")
             with col4:
-                st.metric("角度範囲", f"{angle_range:.1f}°")
+                st.metric("標準偏差", f"{std_angle:.1f}°")
             
-            # 軽量化: 簡単な統計表示のみ
-            st.markdown(f"""
-            ### 📊 解析サマリー
-            - **処理フレーム数**: {analyzer.frame_count}
-            - **最大角度**: {analyzer.max_angle:.1f}°
-            - **最小角度**: {analyzer.min_angle:.1f}°
-            - **平均角度**: {avg_angle:.1f}°
-            - **角度範囲**: {angle_range:.1f}°
-            """)
+            # グラフ
+            fig, ax = plt.subplots(figsize=(12, 6))
+            ax.plot(analyzer.hip_angles, color='blue', linewidth=2, label='腰角度')
+            ax.axhline(y=analyzer.max_angle, color='red', linestyle='--', label=f'最大: {analyzer.max_angle:.1f}°')
+            ax.axhline(y=analyzer.min_angle, color='green', linestyle='--', label=f'最小: {analyzer.min_angle:.1f}°')
+            ax.axhline(y=avg_angle, color='orange', linestyle=':', label=f'平均: {avg_angle:.1f}°')
+            ax.set_xlabel('フレーム数')
+            ax.set_ylabel('角度 (度)')
+            ax.set_title('腰角度の時系列変化')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            st.pyplot(fig)
 
 else:
     st.info("動画ファイルをアップロードして解析を開始してください。")
     st.markdown("""
-    ### 🎯 軽量化された解析機能:
-    - **高速姿勢検出**: MediaPipe軽量モデルによる姿勢検出
+    ### 🎯 解析機能:
+    - **骨格トレース**: MediaPipeによる姿勢検出
     - **頭の基準線**: 頭の高さに固定された水平線
     - **腰角度測定**: 肩-腰-膝の角度をリアルタイム測定
-    - **前方停止検知**: 前方位置での停止を検出（軽量版）
-    - **目線検出**: 矢印による目線方向の表示（簡易版）
-    - **統計情報**: 最大・最小・平均角度の表示
+    - **前方停止検知**: 前方位置での停止を検出
+    - **目線検出**: 矢印による目線方向の表示
+    - **統計情報**: 最大・最小・平均角度と時系列グラフ
     
-
     """)
     
