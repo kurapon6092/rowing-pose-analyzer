@@ -7,7 +7,6 @@ from PIL import Image
 import math
 import tempfile
 import os
-import pandas as pd
 
 # MediaPipeの初期化
 mp_pose = mp.solutions.pose
@@ -227,276 +226,146 @@ class VideoAnalyzer:
         return frame
 
 # Streamlit UI
-st.title("🏃‍♂️ Rowing Pose Analysis App")
-st.markdown("**Skeleton tracking, hip angle measurement, gaze detection + video comparison**")
-
-# タブで機能を切り替え
-tab1, tab2 = st.tabs(["📹 Single Analysis", "🆚 Comparison Analysis"])
+st.title("🏃‍♂️ ローイング姿勢解析アプリ")
+st.markdown("**骨格トレース、腰角度測定、目線検出**")
 
 # サイドバー設定
-st.sidebar.header("⚙️ Settings")
-frame_skip = st.sidebar.slider("Frame Skip (Speed Up)", 1, 5, 1, 
-                               help="Higher = Faster processing",
+st.sidebar.header("⚙️ 設定")
+frame_skip = st.sidebar.slider("フレームスキップ (高速化)", 1, 5, 1, 
+                               help="数値が大きいほど高速処理",
                                key="main_frame_skip")
 
-# Tab 1: 単体解析
-with tab1:
-    st.markdown("### 📹 Single Video Analysis")
-    
-    uploaded_file = st.file_uploader("Upload video file", type=['mp4', 'avi', 'mov'], key="single_upload")
+# 単体解析
+st.markdown("### 📹 動画解析")
 
-    if uploaded_file is not None:
-        tfile = tempfile.NamedTemporaryFile(delete=False)
-        tfile.write(uploaded_file.read())
+uploaded_file = st.file_uploader("動画ファイルをアップロードしてください", type=['mp4', 'avi', 'mov'], key="single_upload")
+
+if uploaded_file is not None:
+    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile.write(uploaded_file.read())
+    
+    analyzer = VideoAnalyzer()
+    cap = cv2.VideoCapture(tfile.name)
+    
+    # UI要素を事前に定義
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        stframe = st.empty()
+        st.markdown("#### 🎯 前方停止検知")
+        pause_display = st.empty()
+    
+    with col2:
+        st.markdown("### 📈 リアルタイムデータ")
+        current_display = st.empty()
+        stats_display = st.empty()
+    
+    progress_bar = st.progress(0)
+    
+    if st.button("解析開始", key="single_analyze"):
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        current_frame = 0
         
-        analyzer = VideoAnalyzer()
-        cap = cv2.VideoCapture(tfile.name)
-        
-        # UI要素を事前に定義（ボタンの外で）
-        col1, col2 = st.columns([3, 1])
-        
-        with col1:
-            stframe = st.empty()
-            st.markdown("#### 🎯 Forward Pause Detection")
-            pause_display = st.empty()
-        
-        with col2:
-            st.markdown("### 📈 Real-time Data")
-            current_display = st.empty()
-            stats_display = st.empty()
-        
-        progress_bar = st.progress(0)
-        
-        if st.button("Start Analysis", key="single_analyze"):
-            frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            current_frame = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
             
-            while True:
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                
-                current_frame += 1
-                if current_frame % frame_skip != 0:
-                    continue
-                
-                processed_frame = analyzer.process_frame(frame)
-                if processed_frame is not None:
-                    stframe.image(processed_frame, channels="BGR")
-                
-                if analyzer.hip_angles:
-                    current_angle = analyzer.hip_angles[-1]
-                    
-                    current_display.markdown(f"""
-                    <div style='background-color: #1f4e79; padding: 15px; border-radius: 10px;'>
-                        <h3 style='color: white; text-align: center; margin: 0;'>Current Angle</h3>
-                        <h1 style='color: #00ff00; text-align: center; font-size: 36px; margin: 0;'>{current_angle:.1f}°</h1>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    stats_display.markdown(f"""
-                    <div style='background-color: #2E2E2E; padding: 10px; border-radius: 8px; margin: 5px 0;'>
-                        <h5 style='color: #FFD700; margin: 0;'>Max: {analyzer.max_angle:.1f}°</h5>
-                        <h5 style='color: #98FB98; margin: 0;'>Min: {analyzer.min_angle:.1f}°</h5>
-                        <h6 style='color: #87CEEB; margin: 0;'>Frame: {current_frame}/{frame_count}</h6>
-                    </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Forward pause display
-                    if analyzer.is_paused_forward and analyzer.pause_counter > 2:
-                        if analyzer.pause_counter < 10:
-                            status_color = "#27AE60"
-                            status_text = "🟢 GOOD PAUSE"
-                        elif analyzer.pause_counter < 20:
-                            status_color = "#F39C12"
-                            status_text = "🟡 PAUSE OK"
-                        else:
-                            status_color = "#E74C3C"
-                            status_text = "🔴 TOO LONG"
-                        
-                        pause_display.markdown(f"""
-                        <div style='background-color: {status_color}; padding: 20px; border-radius: 15px; text-align: center;'>
-                            <h1 style='color: white; margin: 0; font-size: 42px;'>FORWARD PAUSE</h1>
-                            <h2 style='color: white; margin: 0;'>{status_text}</h2>
-                            <h3 style='color: white; margin: 0;'>Duration: {analyzer.pause_counter} frames</h3>
-                        </div>
-                        """, unsafe_allow_html=True)
-                    else:
-                        pause_display.markdown("""
-                        <div style='background-color: #34495E; padding: 20px; border-radius: 10px; text-align: center;'>
-                            <h3 style='color: #BDC3C7; margin: 0;'>🔍 Monitoring for forward pause...</h3>
-                        </div>
-                        """, unsafe_allow_html=True)
-                
-                progress_bar.progress(current_frame / frame_count)
+            current_frame += 1
+            if current_frame % frame_skip != 0:
+                continue
             
-            cap.release()
-            os.unlink(tfile.name)
+            processed_frame = analyzer.process_frame(frame)
+            if processed_frame is not None:
+                stframe.image(processed_frame, channels="BGR")
             
             if analyzer.hip_angles:
-                st.success("🎉 Analysis Complete!")
+                current_angle = analyzer.hip_angles[-1]
                 
-                avg_angle = np.mean(analyzer.hip_angles)
-                std_angle = np.std(analyzer.hip_angles)
+                current_display.markdown(f"""
+                <div style='background-color: #1f4e79; padding: 15px; border-radius: 10px;'>
+                    <h3 style='color: white; text-align: center; margin: 0;'>現在の角度</h3>
+                    <h1 style='color: #00ff00; text-align: center; font-size: 36px; margin: 0;'>{current_angle:.1f}°</h1>
+                </div>
+                """, unsafe_allow_html=True)
                 
-                col1, col2, col3, col4 = st.columns(4)
+                stats_display.markdown(f"""
+                <div style='background-color: #2E2E2E; padding: 10px; border-radius: 8px; margin: 5px 0;'>
+                    <h5 style='color: #FFD700; margin: 0;'>最大: {analyzer.max_angle:.1f}°</h5>
+                    <h5 style='color: #98FB98; margin: 0;'>最小: {analyzer.min_angle:.1f}°</h5>
+                    <h6 style='color: #87CEEB; margin: 0;'>フレーム: {current_frame}/{frame_count}</h6>
+                </div>
+                """, unsafe_allow_html=True)
                 
-                with col1:
-                    st.metric("Max Angle", f"{analyzer.max_angle:.1f}°")
-                with col2:
-                    st.metric("Min Angle", f"{analyzer.min_angle:.1f}°")
-                with col3:
-                    st.metric("Average", f"{avg_angle:.1f}°")
-                with col4:
-                    st.metric("Std Dev", f"{std_angle:.1f}°")
-                
-                # Plot
-                fig, ax = plt.subplots(figsize=(12, 6))
-                ax.plot(analyzer.hip_angles, color='blue', linewidth=2, label='Hip Angle')
-                ax.axhline(y=analyzer.max_angle, color='red', linestyle='--', label=f'Max: {analyzer.max_angle:.1f}°')
-                ax.axhline(y=analyzer.min_angle, color='green', linestyle='--', label=f'Min: {analyzer.min_angle:.1f}°')
-                ax.axhline(y=avg_angle, color='orange', linestyle=':', label=f'Avg: {avg_angle:.1f}°')
-                ax.set_xlabel('Frame Number')
-                ax.set_ylabel('Angle (degrees)')
-                ax.set_title('Hip Angle Time Series')
-                ax.legend()
-                ax.grid(True, alpha=0.3)
-                st.pyplot(fig)
-    
-    else:
-        st.info("Please upload a video file to start analysis.")
-
-# Tab 2: 比較解析
-with tab2:
-    st.markdown("### 🆚 Two Video Comparison Analysis")
-    
-    col_upload1, col_upload2 = st.columns(2)
-    
-    with col_upload1:
-        st.markdown("#### 🎥 Video 1 (Reference)")
-        uploaded_file1 = st.file_uploader("First video file", type=['mp4', 'avi', 'mov'], key="compare_video1")
-    
-    with col_upload2:
-        st.markdown("#### 🎥 Video 2 (Comparison)")
-        uploaded_file2 = st.file_uploader("Second video file", type=['mp4', 'avi', 'mov'], key="compare_video2")
-    
-    if uploaded_file1 is not None and uploaded_file2 is not None:
-        st.success("✅ Two videos uploaded")
-        
-        if st.button("🔍 Start Comparison", key="start_comparison"):
-            analyzer1 = VideoAnalyzer()
-            analyzer2 = VideoAnalyzer()
-            
-            tfile1 = tempfile.NamedTemporaryFile(delete=False)
-            tfile1.write(uploaded_file1.read())
-            tfile2 = tempfile.NamedTemporaryFile(delete=False)
-            tfile2.write(uploaded_file2.read())
-            
-            cap1 = cv2.VideoCapture(tfile1.name)
-            cap2 = cv2.VideoCapture(tfile2.name)
-            
-            st.markdown("## 📊 Real-time Comparison")
-            col_video1, col_video2 = st.columns(2)
-            
-            with col_video1:
-                st.markdown("#### 🎥 Video 1")
-                stframe1 = st.empty()
-                info1 = st.empty()
-            
-            with col_video2:
-                st.markdown("#### 🎥 Video 2")
-                stframe2 = st.empty()
-                info2 = st.empty()
-            
-            comparison_display = st.empty()
-            progress_bar = st.progress(0)
-            
-            frame_count1 = int(cap1.get(cv2.CAP_PROP_FRAME_COUNT))
-            frame_count2 = int(cap2.get(cv2.CAP_PROP_FRAME_COUNT))
-            max_frames = max(frame_count1, frame_count2)
-            
-            current_frame = 0
-            
-            while True:
-                ret1, frame1 = cap1.read()
-                ret2, frame2 = cap2.read()
-                
-                if not ret1 and not ret2:
-                    break
-                
-                current_frame += 1
-                if current_frame % frame_skip != 0:
-                    continue
-                
-                if ret1:
-                    processed_frame1 = analyzer1.process_frame(frame1)
-                    if processed_frame1 is not None:
-                        stframe1.image(processed_frame1, channels="BGR")
-                
-                if ret2:
-                    processed_frame2 = analyzer2.process_frame(frame2)
-                    if processed_frame2 is not None:
-                        stframe2.image(processed_frame2, channels="BGR")
-                
-                if analyzer1.hip_angles and analyzer2.hip_angles:
-                    angle1 = analyzer1.hip_angles[-1]
-                    angle2 = analyzer2.hip_angles[-1]
+                # Forward pause display
+                if analyzer.is_paused_forward and analyzer.pause_counter > 2:
+                    if analyzer.pause_counter < 10:
+                        status_color = "#27AE60"
+                        status_text = "🟢 GOOD PAUSE"
+                    elif analyzer.pause_counter < 20:
+                        status_color = "#F39C12"
+                        status_text = "🟡 PAUSE OK"
+                    else:
+                        status_color = "#E74C3C"
+                        status_text = "🔴 TOO LONG"
                     
-                    info1.markdown(f"**Current: {angle1:.1f}°** | Max: {analyzer1.max_angle:.1f}°")
-                    info2.markdown(f"**Current: {angle2:.1f}°** | Max: {analyzer2.max_angle:.1f}°")
-                    
-                    angle_diff = angle1 - angle2
-                    diff_status = "🟢 Similar" if abs(angle_diff) < 5 else "🔴 Different"
-                    
-                    comparison_display.markdown(f"""
-                    <div style='background-color: #2C3E50; padding: 20px; border-radius: 15px; text-align: center;'>
-                        <h1 style='color: white; margin: 0; font-size: 48px;'>Angle Difference: {angle_diff:+.1f}°</h1>
-                        <h2 style='color: white; margin: 0;'>{diff_status}</h2>
+                    pause_display.markdown(f"""
+                    <div style='background-color: {status_color}; padding: 20px; border-radius: 15px; text-align: center;'>
+                        <h1 style='color: white; margin: 0; font-size: 42px;'>前方停止</h1>
+                        <h2 style='color: white; margin: 0;'>{status_text}</h2>
+                        <h3 style='color: white; margin: 0;'>継続時間: {analyzer.pause_counter} フレーム</h3>
                     </div>
                     """, unsafe_allow_html=True)
-                
-                progress_bar.progress(current_frame / max_frames)
+                else:
+                    pause_display.markdown("""
+                    <div style='background-color: #34495E; padding: 20px; border-radius: 10px; text-align: center;'>
+                        <h3 style='color: #BDC3C7; margin: 0;'>🔍 前方停止を監視中...</h3>
+                    </div>
+                    """, unsafe_allow_html=True)
             
-            cap1.release()
-            cap2.release()
-            os.unlink(tfile1.name)
-            os.unlink(tfile2.name)
+            progress_bar.progress(current_frame / frame_count)
+        
+        cap.release()
+        os.unlink(tfile.name)
+        
+        if analyzer.hip_angles:
+            st.success("🎉 解析完了！")
             
-            if analyzer1.hip_angles and analyzer2.hip_angles:
-                st.success("🎉 Comparison Complete!")
-                
-                avg1 = np.mean(analyzer1.hip_angles)
-                avg2 = np.mean(analyzer2.hip_angles)
-                
-                col1, col2, col3 = st.columns(3)
-                
-                with col1:
-                    st.metric("Max Angle Difference", f"{analyzer1.max_angle - analyzer2.max_angle:+.1f}°")
-                with col2:
-                    st.metric("Average Angle Difference", f"{avg1 - avg2:+.1f}°")
-                with col3:
-                    better = "Video 1" if np.std(analyzer1.hip_angles) < np.std(analyzer2.hip_angles) else "Video 2"
-                    st.metric("More Stable", better)
-                
-                # Comparison plot
-                fig, ax = plt.subplots(figsize=(14, 8))
-                ax.plot(analyzer1.hip_angles, color='blue', linewidth=2, label='Video 1', alpha=0.8)
-                ax.plot(analyzer2.hip_angles, color='red', linewidth=2, label='Video 2', alpha=0.8)
-                ax.set_xlabel('Frame Number')
-                ax.set_ylabel('Hip Angle (degrees)')
-                ax.set_title('Hip Angle Comparison')
-                ax.legend()
-                ax.grid(True, alpha=0.3)
-                st.pyplot(fig)
-    
-    elif uploaded_file1 is not None or uploaded_file2 is not None:
-        st.info("📹 Please upload both videos to start comparison analysis")
-    else:
-        st.info("Upload two video files to compare their analysis.")
-        st.markdown("""
-        ### 🆚 Comparison Features:
-        - **Parallel Processing**: Process both videos simultaneously
-        - **Real-time Comparison**: Live angle difference display
-        - **Statistical Comparison**: Detailed numerical comparison
-        - **Visual Comparison**: Overlaid graphs
-        """)
+            avg_angle = np.mean(analyzer.hip_angles)
+            std_angle = np.std(analyzer.hip_angles)
+            
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("最大角度", f"{analyzer.max_angle:.1f}°")
+            with col2:
+                st.metric("最小角度", f"{analyzer.min_angle:.1f}°")
+            with col3:
+                st.metric("平均角度", f"{avg_angle:.1f}°")
+            with col4:
+                st.metric("標準偏差", f"{std_angle:.1f}°")
+            
+            # グラフ
+            fig, ax = plt.subplots(figsize=(12, 6))
+            ax.plot(analyzer.hip_angles, color='blue', linewidth=2, label='腰角度')
+            ax.axhline(y=analyzer.max_angle, color='red', linestyle='--', label=f'最大: {analyzer.max_angle:.1f}°')
+            ax.axhline(y=analyzer.min_angle, color='green', linestyle='--', label=f'最小: {analyzer.min_angle:.1f}°')
+            ax.axhline(y=avg_angle, color='orange', linestyle=':', label=f'平均: {avg_angle:.1f}°')
+            ax.set_xlabel('フレーム数')
+            ax.set_ylabel('角度 (度)')
+            ax.set_title('腰角度の時系列変化')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            st.pyplot(fig)
+
+else:
+    st.info("動画ファイルをアップロードして解析を開始してください。")
+    st.markdown("""
+    ### 🎯 解析機能:
+    - **骨格トレース**: MediaPipeによる姿勢検出
+    - **頭の基準線**: 頭の高さに固定された水平線
+    - **腰角度測定**: 肩-腰-膝の角度をリアルタイム測定
+    - **前方停止検知**: 前方位置での停止を検出
+    - **目線検出**: 矢印による目線方向の表示
+    - **統計情報**: 最大・最小・平均角度と時系列グラフ
+    """)
